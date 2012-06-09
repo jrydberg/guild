@@ -1,0 +1,20 @@
+Remaining to do:
+
+* Core functionality
+ * Links
+ * Monitor
+
+* Remote Nodes
+ * Peer protocol
+ * Zookeeper client: kazoo or gevent-zookeeper ?
+
+* Examples
+ * A simple paxos implementation
+ * Implement an event processing system similar to Storm
+
+* Performance
+ * Messages per second
+  * Find and document the bottlenecks
+
+* Update README
+* Write docs
