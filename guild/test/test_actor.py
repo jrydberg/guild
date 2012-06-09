@@ -31,6 +31,18 @@ class LinkTestCase(unittest.TestCase):
         self.mesh = Mesh()
         self.node = Node(self.mesh, 'test-node')
 
+    def test_spawn_link_abnormal_exit(self):
+        def actor1(receive):
+            return 1 / 0
+
+        class Actor2(Actor):
+            def main(self):
+                spawn_link(actor1)
+                gevent.sleep(1)
+
+        addr = self.node.spawn(Actor2)
+        self.assertRaises(LinkBroken, self.node.wait, addr)
+
     def test_spawn_link_normal_exit(self):
         def actor1(receive):
             return 'value'
@@ -39,10 +51,11 @@ class LinkTestCase(unittest.TestCase):
             def main(self):
                 #self.trap_exit = True
                 spawn_link(actor1)
-                gevent.sleep(10)
+                gevent.sleep(0.1)
+                return 'other'
 
         addr = self.node.spawn(Actor2)
-        self.assertRaises(LinkBroken, self.node.wait, addr)
+        self.assertEquals(self.node.wait(addr), 'other')
 
     def test_link_trap_exit(self):
         def actor1(receive):

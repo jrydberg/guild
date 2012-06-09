@@ -469,9 +469,12 @@ class Actor(object):
         if self.trap_exit:
             self._cast(message)
         else:
-            # The actor do not trap the exit, which means we
-            # should terminate it.
-            self.greenlet.kill(LinkBroken(from_addr), block=False)
+            # The actor do not trap the exit, which means we should
+            # terminate it.  But only if it was an abnormal
+            # termination.
+            message = json.loads(message, object_hook=generate_custom)
+            if not message.has_key('value'):
+                self.greenlet.kill(LinkBroken(from_addr), block=False)
 
     def _get(self, timeout=None):
         """For internal use.
