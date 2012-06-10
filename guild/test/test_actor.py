@@ -23,7 +23,7 @@
 import unittest
 import gevent
 
-from guild import spawn_link, LinkBroken, Actor, Node, Mesh
+from guild import spawn_link, LinkBroken, Actor, Node, Mesh, spawn
 
 class LinkTestCase(unittest.TestCase):
 
@@ -72,3 +72,72 @@ class LinkTestCase(unittest.TestCase):
         msg = self.node.wait(addr)
         self.assertTrue(isinstance(msg, dict))
         self.assertEquals(msg['value'], 'value')
+
+
+class MonitorTestCase(unittest.TestCase):
+
+    def setUp(self):
+        self.mesh = Mesh()
+        self.node = Node(self.mesh, 'test-node')
+
+    def test_noproc_on_monitor_dead_actor(self):
+        pass
+
+    def test_demonitor_no_exit_signal(self):
+        def child(receive):
+            gevent.sleep(0.05)
+            return 'exit-value'
+
+        class Parent(Actor):
+
+            def main(self):
+                self.trap_exit = True
+                addr = spawn(child)
+                ref = addr.monitor()
+                ref.demonitor()
+                pat, msg = self.receive(timeout=0.1)
+                return msg
+
+        addr = self.node.spawn(Parent)
+        msg = self.node.wait(addr)
+
+    def test_receive_exit_signal(self):
+
+        def child(receive):
+            return 'exit-value'
+
+        class Parent(Actor):
+
+            def main(self):
+                self.trap_exit = True
+                addr = spawn(child)
+                ref = addr.monitor()
+                pat, msg = self.receive(timeout=0.1)
+                return msg
+
+        addr = self.node.spawn(Parent)
+        msg = self.node.wait(addr)
+        self.assertEquals(msg['value'], 'exit-value')
+        self.assertTrue('exit' in msg)
+        self.assertTrue('ref' in msg)
+
+    def test_monitor_finished_actor(self):
+
+        def child(receive):
+            return 'exit-value'
+
+        class Parent(Actor):
+
+            def main(self):
+                self.trap_exit = True
+                addr = spawn(child)
+                gevent.sleep()
+                ref = addr.monitor()
+                pat, msg = self.receive(timeout=0.1)
+                return msg
+
+        addr = self.node.spawn(Parent)
+        msg = self.node.wait(addr)
+        self.assertEquals(msg['value'], 'exit-value')
+        self.assertTrue('exit' in msg)
+        self.assertTrue('ref' in msg)

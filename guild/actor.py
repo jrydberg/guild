@@ -171,6 +171,8 @@ def spawn_link(spawnable, *args, **kw):
 def handle_custom(obj):
     if isinstance(obj, Address):
         return obj.to_json()
+    if isinstance(obj, Ref):
+        return obj.to_json()
     raise TypeError(obj)
 
 
@@ -178,7 +180,49 @@ def generate_custom(obj):
     address = Address.from_json(obj)
     if address:
         return address
+    ref = Ref.from_json(obj)
+    if ref:
+        return ref
     return obj
+
+
+class Ref(object):
+    """A reference."""
+
+    def __init__(self, node_id, ref_id):
+        self._node_id = node_id
+        self._ref_id = ref_id
+
+    ref_id = property(lambda self: self._ref_id)
+    node_id = property(lambda self: self._node_id)
+
+    def to_json(self):
+        return {'_pyact_ref_id': self._ref_id,
+                '_pyact_node_id': self._node_id}
+
+    @classmethod
+    def from_json(cls, obj):
+        if sorted(obj.keys()) == ['_pyact_ref_id', '_pyact_node_id']:
+            return Ref(obj['_pyact_node_id'], obj['_pyact_ref_id'])
+        return None
+
+    def __eq__(self, other):
+        return (isinstance(other, Ref)
+                and other.node_id == self.node_id
+                and other.ref_id == self.ref_id)
+
+    def __hash__(self):
+        return hash((self.node_id, self._ref_id))
+
+
+class MonitorRef(object):
+
+    def __init__(self, address, ref):
+        self.address = address
+        self.ref = ref
+
+    def demonitor(self):
+        curmesh().demonitor(self.address, self.ref)
 
 
 class Address(object):
@@ -209,6 +253,14 @@ class Address(object):
             return Address(obj['_pyact_node_id'], obj['_pyact_actor_id'])
         return None
 
+    def __eq__(self, other):
+        return (isinstance(other, Address)
+                and other.node_id == self.node_id
+                and other.actor_id == self.actor_id)
+
+    def __hash__(self):
+        return hash((self.node_id, self._actor_id))
+
     def cast(self, message):
         """Send a message to the Actor this object addresses."""
         curnode().send(self, message)
@@ -233,14 +285,24 @@ class Address(object):
 
         When the actor dies, a exit message will be sent to the
         current actor.
+
+        This call returns a reference that can be used to cancel the
+        monitor with the C{demonitor} function.
         """
-        curmesh().monitor(self, curaddr())
+        ref = curnode().make_ref()
+        curmesh().monitor(self, curaddr(), ref)
+        return MonitorRef(self, ref)
+
+    def demonitor(self, ref):
+        """Cancel a monitor."""
+        curmesh().demonitor(self, ref)
 
     def link(self):
         """Link the current actor to the actor this object addresses.
         """
         print "addr.link curr %s to %s" % (curaddr(), self)
-        curmesh().link(self, curaddr())
+        curactor().link(self)
+        #curmesh().link(self, curaddr())
 
     def call(self, method, message=None, timeout=None):
         """Send a message to the Actor this object addresses.  Wait
@@ -321,6 +383,17 @@ INVALID_METHOD_PATTERN = {'response': str, 'invalid_method': str}
 EXCEPTION_PATTERN = {'response': str, 'exception':object}
 
 
+class Monitor(object):
+
+    def __init__(self, actor, ref, to_addr):
+        self.actor = actor
+        self.ref = ref
+        self.to_addr = to_addr
+
+    def _send_exit(self, *args):
+        self.actor._send_exit(self.to_addr, self.ref)
+
+
 class Actor(object):
     """An Actor is a Greenlet which has a mailbox.  Any other Actor
     which has the Address can asynchronously put messages in this
@@ -364,6 +437,7 @@ class Actor(object):
         self._mailbox = []
         self.address = Address(node.id, self._actor_id)
         self.trap_exit = False
+        self.monitors = {}
 
     def _run(self):
         """Run the actor."""
@@ -431,13 +505,20 @@ class Actor(object):
         except ReceiveTimeout:
             return (None,None)
 
-    def _send_exit(self, to_addr):
+    def link(self, to_addr):
+        """Link this actor to a remote address."""
+        self._link(to_addr)
+        self.mesh.link(to_addr, self.address)
+
+    def _send_exit(self, to_addr, ref=None):
         """Send an exit message to the remote address."""
         if self.greenlet.exception:
             message = {'exit': self.address, 'exception': exc.format_exc(
                     self.greenlet._exc_info)}
         else:
             message = {'exit': self.address, 'value': self.greenlet.value}
+        if ref:
+            message['ref'] = ref
         message = json.dumps(message, default=handle_custom)
         self.mesh.exit(self.address, to_addr, message)
 
@@ -451,6 +532,23 @@ class Actor(object):
         """
         print "we link %s to %s" % (self.address, to_addr)
         self.greenlet.link(lambda g: self._send_exit(to_addr))
+
+    def _monitor(self, to_addr, ref):
+        """For internal use.
+
+        XXX
+        """
+        if self.greenlet.ready():
+            self._send_exit(to_addr, ref)
+        else:
+            monitor = Monitor(self, ref, to_addr)
+            self.greenlet.link(monitor._send_exit)
+            self.monitors[ref] = monitor
+
+    def _demonitor(self, to_addr, ref):
+        if ref in self.monitors:
+            monitor = self.monitors.pop(ref)
+            self.greenlet.unlink(monitor._send_exit)
 
     def _cast(self, message):
         """For internal use.
@@ -474,7 +572,8 @@ class Actor(object):
             # termination.
             message = json.loads(message, object_hook=generate_custom)
             if not message.has_key('value'):
-                self.greenlet.kill(LinkBroken(from_addr), block=False)
+                self.greenlet.kill(LinkBroken(from_addr, message),
+                                   block=False)
 
     def _get(self, timeout=None):
         """For internal use.
@@ -591,17 +690,20 @@ class Mesh(object):
         The message may be silently dropped if the remote node do not
         exit or if the actor is dead.
         """
-        self._forward(address, '_cast', message)
+        self._forward(address, '_cast', address, message)
 
-    def link(self, pid1, pid2):
+    def link(self, address, to_addr):
         """Link actor C{pid1} to actor with address C{pid2}.
         """
-        self._forward(pid1, '_link', pid1, pid2)
-        self._forward(pid2, '_link', pid2, pid1)
+        self._forward(address, '_link', address, to_addr)
 
-    def monitor(self, address, to_addr):
+    def monitor(self, address, to_addr, ref):
         """Monitor C{address}."""
-        self._forward(address, '_monitor', address, to_addr)
+        self._forward(address, '_monitor', address, to_addr, ref)
+
+    def demonitor(self, address, ref):
+        """."""
+        self._forward(address, '_demonitor', address, ref)
 
 
 class Node(object):
@@ -616,6 +718,10 @@ class Node(object):
         self.actors = weakref.WeakValueDictionary()
         mesh.add(self)
         self.registry = {}
+
+    def make_ref(self):
+        """Return a new reference."""
+        return Ref(self._id, str(uuid.uuid4()))
 
     def register(self, name, address):
         """Associates the name C{name} with the process C{address}."""
@@ -712,11 +818,20 @@ class Node(object):
         else:
             _actor._link(to_addr)
 
-    def _monitor(self, address, to_addr):
+    def _monitor(self, address, to_addr, ref):
         try:
             _actor = self.actors[address.actor_id]
         except KeyError:
             # FIXME: Send an exit message.
             pass
         else:
-            _actor._link(to_addr)
+            _actor._monitor(to_addr, ref)
+
+    def _demonitor(self, address, ref):
+        try:
+            _actor = self.actors[address.actor_id]
+        except KeyError:
+            # FIXME: Send an exit message.
+            pass
+        else:
+            _actor._demonitor(address, ref)

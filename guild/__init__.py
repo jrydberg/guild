@@ -22,6 +22,6 @@
 
 from guild.actor import (spawn, spawn_link,
                          curaddr, register, whereis,
-                         Actor, Node, Mesh, Server,
+                         Actor, Node, Mesh, Server, Address, Ref,
                          LinkBroken, RemoteAttributeError,
                          RemoteException)
