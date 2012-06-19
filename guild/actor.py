@@ -519,7 +519,7 @@ class Actor(object):
             message = {'exit': self.address, 'value': self.greenlet.value}
         if ref:
             message['ref'] = ref
-        message = json.dumps(message, default=handle_custom)
+        #message = json.dumps(message, default=handle_custom)
         self.mesh.exit(self.address, to_addr, message)
 
     def _link(self, to_addr):
@@ -555,7 +555,7 @@ class Actor(object):
 
         Nodes uses this to insert a message into this Actor's mailbox.
         """
-        self._mailbox.append(json.loads(message, object_hook=generate_custom))
+        self._mailbox.append(message)
         if self._wevent and not self._wevent.is_set():
             self._wevent.set()
 
@@ -570,7 +570,6 @@ class Actor(object):
             # The actor do not trap the exit, which means we should
             # terminate it.  But only if it was an abnormal
             # termination.
-            message = json.loads(message, object_hook=generate_custom)
             if not message.has_key('value'):
                 self.greenlet.kill(LinkBroken(from_addr, message),
                                    block=False)
@@ -593,7 +592,7 @@ class Actor(object):
 
     def cast(self, address, message):
         """Send a message to the given address."""
-        self.mesh.cast(address, json.dumps(message, default=handle_custom))
+        self.mesh.cast(address, message)
 
 
 class Server(Actor):
@@ -786,7 +785,7 @@ class Node(object):
     def send(self, address, message):
         """Send a message to an actor on this node or another one.
         """
-        self._mesh.cast(address, json.dumps(message, default=handle_custom))
+        self._mesh.cast(address, message)
 
     def _cast(self, address, message):
         """For internal use.
