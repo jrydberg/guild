@@ -25,3 +25,5 @@ from guild.actor import (spawn, spawn_link,
                          Actor, Node, Mesh, Server, Address, Ref,
                          LinkBroken, RemoteAttributeError,
                          RemoteException)
+from guild.data import factory as plist
+from pysistence import make_dict as pdict

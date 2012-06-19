@@ -22,10 +22,12 @@ THE SOFTWARE.
 
 import sys
 
+from .data import plist, make_list as make_plist, plist_factory
+
 PY_MAJOR_VERSION = sys.version_info[0]
 
 
-CONTAINER_TYPES = [dict, list, tuple, set]
+CONTAINER_TYPES = [dict, list, tuple, set, plist, plist_factory]
 
 
 class ShapeMismatch(Exception):
@@ -86,6 +88,17 @@ def is_shaped_exc(thing, shape):
                             name, shape, thing))
                 subitem = thing[name]
                 subtype = shape[name]
+                is_shaped_exc(subitem, subtype)
+        elif shape_type is plist_factory:
+            if not isinstance(thing, plist):
+                raise TypeMismatch("type %s is not a plist" % type(thing))
+        elif shape_type is plist:
+            # use for x in container to work with sets
+            for subtype in shape:
+                break
+            if not isinstance(thing, plist):
+                raise TypeMismatch("type %s is not a plist" % type(thing))
+            for subitem in thing:
                 is_shaped_exc(subitem, subtype)
         elif shape_type in (list, set):
             # use for x in container to work with sets 
