@@ -1,7 +1,4 @@
-# python-actors
-
-This is some work on Donovan Preston's python-actors [1] so that it
-works with gevent.
+# Guild, actors for python (and gevent)
 
 Since the dawn of concurrency research, there have been two camps:
 shared everything, and shared nothing. Most modern applications use
@@ -13,64 +10,44 @@ can change their state, create a new Actor, send a message to any
 Actor it has the Address of, and wait for a specific kind of message
 to arrive in it's mailbox.
 
-[1] https://bitbucket.org/fzzzy/python-actors
+*guild* is a small package that provides actors in a python+gevent
+environment.  It is quite closely modelled after probably the most
+known actor-based language and runtime: Erlang.
 
 Requirements:
 
  * gevent 0.13
- * simplejson
  * a large dose of patience
 
-# What Is an Actor?
-
-* An actor is a process
-* An actor can change it's own state
-* An actor can create another actor and get it's address
-* An actor can send a message to any addresses it knows
-* An actor can wait for a specific message to arrive in it's mailbox
-
-# Why Use Actors?
-
-* Only an actor can change it's own state
-* Each actor is a process, simplifying control flow
-* Message passing is easy to distribute
-* Most exceptional conditions occur when waiting for a message
-* Isolates error handling code
-* Makes it easier to build fault tolerant distributed systems
-
-# How Are Actors Implemented in python-actors?
+# How Are Actors Implemented in guild?
 
 *gevent* and greenlet threads are used to implement the actor
 processes.  This doesn't provide real isolation: but python doesn't
 provide private either.
 
-When messages are sent between actors they are serialized to json and
-copied.  This provides isolation and makes the messages network safe.
+*guild* has no copy-on-send semantics and leave the responsibility of
+sending immutable messages on the user.  It is also recommended to use
+the persisntent data structures that comes with guild.  There's a
+whole section on those later in this document.
 
-Problem: Imported modules leak state between actors
+It is also recommended that you stay away from writing code that
+absule global module state.
 
-* Possibility: Keep a unique copy of sys.modules for every actor
-* Possibility: Seal modules in wrapper object preventing modification
-* Reality: Just write code that doesn't abuse global module state
+# How To Use guild
 
-# How To Use python-actors
+Most stuff lives in the `guild` package:
 
-Most stuff lives in the `pyact` package and in the `actor` module:
-
- * `pyact.actor.Mesh` represents the mesh of connected nodes.
- * `pyact.actor.Node` is a local node.
- * `pyact.actor.Actor` is an actor.
+ * `guild.Mesh` represents the mesh of connected nodes.
+ * `guild.Node` is a local node.
+ * `guild.Actor` is an actor.
 
 To get going you need to create a mesh and a local node:
 
-    mesh = actor.Mesh()
-    node = actor.Node(mesh, 'cookie@localhost.local:3433')
+    mesh = guild.Mesh()
+    node = guild.Node(mesh, 'node-id')
 
-The second argument to `Node` is the name of the node.  The format is
-`COOKIE@HOST:PORT`.  The cookie is used to create some kind of
-security: two nodes must have the same cookie to be able to
-communicate.  The *HOST* and *PORT* arguments give the network
-location of the node.
+The second argument to `Node` is the name of the node and must be
+unique within your mesh.
 
 When the node is set up the first actor can be created:
 
@@ -83,6 +60,8 @@ There are two ways to create an actor: either by subclassing `Actor`
 or by just passing a function to `spawn`.  Arguments passed to `spawn`
 are forwarded to the actor:
 
+    import guild, gevent
+
     def forward(receive, address):
         pat, data = receive()
         address | data
@@ -91,18 +70,17 @@ are forwarded to the actor:
         ring = []
         for i in range(n):
             if not ring:
-                node = actor.spawn(forward, actor.curaddr())
+                node = guild.spawn(forward, guild.curaddr())
             else:
-                node = actor.spawn(forward, ring[-1])
+                node = guild.spawn(forward, ring[-1])
             ring.append(node)
-            gevent.sleep()
 
         ring[-1] | {'text': 'hello around the ring'}
         pat, data = receive()
         return data
 
-    mesh = actor.Mesh()
-    node = actor.Node(mesh, 'cookie@localhost.local:3433')
+    mesh = guild.Mesh()
+    node = guild.Node(mesh, 'node-id')
     addr = node.spawn(build, 10000)
     print node.wait(addr)
 
@@ -117,9 +95,9 @@ that waits for a local actor to finish and returns the result.
 
 ## Receiving Messages
 
-`python-actors` has just like Erlang selective receive.  This means
-that if messages in the mailbox will be left there if the call to
-*receive* do not provide a matching pattern.
+*guild* has just like Erlang selective receive.  This means that if
+messages in the mailbox will be left there if the call to *receive* do
+not provide a matching pattern.
 
 Patterns are python objects that can contain "wildcard types".  A
 simple example is the following dictionary pattern: `{"name": int}`.
@@ -139,8 +117,66 @@ Note that tuples must match is length.  This is not true for lists,
 which is used to match arrays.  The first element in an array match is
 a type: `[str]` will match `['a', 'b']` but not `[1, 'b']`.
 
+
+# Persistent Data Structures
+
+From Wikipedia:
+
+> [...] a persistent data structure is a data structure that always
+> preserves the previous version of itself when it is modified. Such
+> data structures are effectively immutable, as their operations do
+> not (visibly) update the structure in-place, but instead always
+> yield a new updated structure. (A persistent data structure is not a
+> data structure committed to persistent storage, such as a disk; this
+> is a different and unrelated sense of the word "persistent.")
+
+*guild* comes with two persistent data structures: a list and a
+dictionary.  The list, `guild.plist`, looks pretty much like a list in
+Scheme or Clojure.  The list has two properties: `first` is the first
+element of the list and `rest` is the following elements of the list
+as another `plist`.  The list has a function `cons` that can be used
+to create a list with a given value as the first element:
+
+    >>> plist([1, 2, 3]).cons(0)
+    plist([0, 1, 2, 3])
+
+Use `concat` to concatenate two lists.  Returns the new list:
+
+    >>> plist([0, 1]).concat(plist([2, 3]))
+    plist([0, 1, 2, 3])
+
+(It is also possible to concatenate a regular list to a *plist*.).  If
+you just want to append a single value to the list, use `append`.
+
+It is also possible to create a new list where a single element has
+been replaced.  Do this with `replace`:
+
+    >>> plist([0, 2, 3]).replace(2, 1)
+    plist([0, 1, 3])
+
+To get a new list with some values filtered out, use the `without`
+method:
+
+    >>> plist([1, 2, 3]).without(2, 3)
+    plist([0])
+
+The persistent dictionary, `guild.pdict`, is a regular `dict` except
+it is immutable. It has two extra methods, `using` and `without`, as
+demostrated below:
+
+    >>> pdict(a=1).using(b=2)
+    {'a': 1, 'b': 2}
+    >>> pdict(a=1, b=2).without('b')
+    {'a': 1}
+
 # Roadmap
 
 * Get remote nodes working so we can build actual networks
 * Proper linking and monitoring
 * Create basic constructs such as supervisors and routers
+* Slicing of persistent lists.
+
+# Credits
+
+*guild* is based on Donovan Preston's python-actors.  Many thanks to
+him and his great work.
